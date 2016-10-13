@@ -4,8 +4,8 @@ module Fluent
   class RedisOutput < BufferedOutput
     Fluent::Plugin.register_output('redis', self)
 
-    config_param :host, :string, :default => nil
-    config_param :socket_path, :string, :default => 'localhost'
+    config_param :host, :string, :default => 'localhost'
+    config_param :socket_path, :string, :default => nil
     config_param :port, :integer, :default => 6379
     config_param :password, :string, :default => nil, :secret => true
     config_param :db_number, :integer, :default => nil
@@ -54,15 +54,19 @@ module Fluent
     end
 
     def format(tag, time, record)
-      identifier = [tag, time].join(".")
+      identifier = [tag, time].join('.')
       [identifier, record].to_msgpack
     end
 
     def aggregate_chunk(chunk)
-      aggregate = Hash.new(0)
+      if @data_type == 'key-value'
+        aggregate_key_value(chunk)
+      end
+    end
 
-      chunk.msgpack_each do
-
+    def aggregate_key_value(chunk)
+      chunk.msgpack_each do |tag, time, record|
+        puts record.inspect
       end
     end
 
