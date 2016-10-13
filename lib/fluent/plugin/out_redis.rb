@@ -13,7 +13,6 @@ module Fluent
     config_param :ttl, :integer, :default => nil
     config_param :aggregate_operator, :string, :default => nil
 
-
     def initialize
       super
       require 'redis'
@@ -25,6 +24,14 @@ module Fluent
 
       if @host.nil? && @socket_path.nil?
         raise ConfigError, 'One of host or socket_path must be set to connect to redis server'
+      end
+
+      unless @aggregate_operator.nil? || %w(+ - / * %).include?(@aggregate_operator)
+        raise ConfigError, 'Invalid aggregate operation supplied'
+      end
+
+      unless %w(key-value hash-map).include?(@data_type)
+        raise ConfigError, 'Invalid data type supplied'
       end
 
       if conf.has_key?('namespace')
@@ -59,33 +66,56 @@ module Fluent
     end
 
     def aggregate_chunk(chunk)
-      if @data_type == 'key-value'
-        aggregate_key_value(chunk)
+      case @date_type
+        when 'key-value'
+          aggregate_key_value(chunk)
+        when 'hash-map'
+          aggregate_hash_map(chunk)
+        else
+          raise ConfigError, 'Invalid data type supplied'
       end
     end
 
     def aggregate_key_value(chunk)
-      chunk.msgpack_each do |tag, time, record|
-        puts record.inspect
+      aggregate = Hash.new(0)
+
+      chunk.msgpack_each do |tag, record|
+        next unless record.is_a?(Hash)
+
+        record.each do |key, value|
+          next unless value.is_a?(Integer)
+
+          aggregate[key] = aggregate[key].send(@aggregate_operator, value)
+        end
       end
+
+      aggregate
     end
 
-    def aggregate_hm
+    def aggregate_hash_map(chunk)
 
     end
 
     def write(chunk)
-      @redis.pipelined {
-        chunk.open { |io|
-          begin
-            MessagePack::Unpacker.new(io).each.each_with_index { |record, index|
-              @redis.mapped_hmset "#{record[0]}.#{index}", record[1]
-            }
-          rescue EOFError
-            # EOFError always occured when reached end of chunk.
-          end
-        }
-      }
+      if !@aggregate_operator.nil?
+        data_chunk = aggregate_chunk(chunk)
+      else
+
+      end
+
+      aggregate_chunk(chunk) unless @aggregate_operator.nil?
+
+      # @redis.pipelined {
+      #   chunk.open { |io|
+      #     begin
+      #       MessagePack::Unpacker.new(io).each.each_with_index { |record, index|
+      #         @redis.mapped_hmset "#{record[0]}.#{index}", record[1]
+      #       }
+      #     rescue EOFError
+      #       # EOFError always occured when reached end of chunk.
+      #     end
+      #   }
+      # }
     end
   end
 end
