@@ -65,8 +65,28 @@ module Fluent
       [identifier, record].to_msgpack
     end
 
+    def write(chunk)
+      if !@aggregate_operator.nil?
+        data_chunk = aggregate_chunk(chunk)
+      else
+      end
+
+      # @redis.pipelined {
+      #   chunk.open { |io|
+      #     begin
+      #       MessagePack::Unpacker.new(io).each.each_with_index { |record, index|
+      #         @redis.mapped_hmset "#{record[0]}.#{index}", record[1]
+      #       }
+      #     rescue EOFError
+      #       # EOFError always occured when reached end of chunk.
+      #     end
+      #   }
+      # }
+    end
+
+    private
     def aggregate_chunk(chunk)
-      case @date_type
+      case @data_type
         when 'key-value'
           aggregate_key_value(chunk)
         when 'hash-map'
@@ -83,7 +103,7 @@ module Fluent
         next unless record.is_a?(Hash)
 
         record.each do |key, value|
-          next unless value.is_a?(Integer)
+          next unless value.is_a?(Numeric)
 
           aggregate[key] = aggregate[key].send(@aggregate_operator, value)
         end
@@ -93,29 +113,25 @@ module Fluent
     end
 
     def aggregate_hash_map(chunk)
+      aggregate = {}
 
-    end
+      chunk.msgpack_each do |tag, record|
+        next unless record.is_a?(Hash)
 
-    def write(chunk)
-      if !@aggregate_operator.nil?
-        data_chunk = aggregate_chunk(chunk)
-      else
+        record.each do |key, value|
+          next unless value.is_a?(Hash)
 
+          aggregate[key] = Hash.new(0) unless aggregate.key?(key)
+
+          aggregate[key].merge!(value) { |k, v1, v2|
+            v1.send(@aggregate_operator, v2)
+          }
+        end
       end
 
-      aggregate_chunk(chunk) unless @aggregate_operator.nil?
+      puts aggregate.inspect
 
-      # @redis.pipelined {
-      #   chunk.open { |io|
-      #     begin
-      #       MessagePack::Unpacker.new(io).each.each_with_index { |record, index|
-      #         @redis.mapped_hmset "#{record[0]}.#{index}", record[1]
-      #       }
-      #     rescue EOFError
-      #       # EOFError always occured when reached end of chunk.
-      #     end
-      #   }
-      # }
+      aggregate
     end
   end
 end
