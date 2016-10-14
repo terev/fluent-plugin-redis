@@ -111,35 +111,38 @@ module Fluent
         records.each do |key, values|
           next unless values.is_a?(Hash)
 
-          hash_exists = @redis.exists(key)
-          if hash_exists
-            # Existing hash increment all numeric and set all strings
-            sets = {}
-            @redis.pipelined {
-              values.each do |field, value|
-                case value
-                  when String
-                    sets[field] = value
-                  when Integer
-                    @redis.hincrby(key, field, value)
-                  when Float
-                    @redis.hincrbyfloat(key, field, value)
-                  else
-                    # Invalid type
+          @redis.watch(key) do
+            if @redis.exists(key)
+              @redis.multi do |multi|
+                sets = {}
+                values.each do |field, value|
+                  case value
+                    when String
+                      sets[field] = value
+                    when Integer
+                      multi.hincrby(key, field, value)
+                    when Float
+                      multi.hincrbyfloat(key, field, value)
+                    else
+                      # Invalid type
+                  end
                 end
+                multi.mapped_hmset(key, sets) unless sets.empty?
               end
+            else
+              @redis.unwatch
 
-              @redis.mapped_hmset(key, sets) unless sets.empty?
-            }
-          elsif @key_options[:ex]
-            # New hash set all the fields and set expiry
-            @redis.pipelined {
-              @redis.mapped_hmset(key, values)
-              @redis.expire(key, @key_options[:ex])
-            }
-          else
-            # New hash set all the fields
-            @redis.mapped_hmset(key, values)
+              if @key_options[:ex]
+                # New hash set all the fields and set expiry
+                @redis.pipelined {
+                  @redis.mapped_hmset(key, values)
+                  @redis.expire(key, @key_options[:ex])
+                }
+              else
+                # New hash set all the fields
+                @redis.mapped_hmset(key, values)
+              end
+            end
           end
         end
       end
