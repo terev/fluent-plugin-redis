@@ -103,8 +103,6 @@ module Fluent
         next unless record.is_a?(Hash)
 
         record.each do |key, value|
-          next unless value.is_a?(Numeric)
-
           aggregate[key] = aggregate[key].send(@aggregate_operator, value)
         end
       end
