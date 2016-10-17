@@ -10,6 +10,19 @@ class RedisDump
     load_scripts(data_type)
   end
 
+  def quit
+    @redis.quit
+  end
+
+  def write(chunk)
+    chunk.msgpack_each { |tag, time, record|
+      next unless record.is_a?(Hash)
+
+      @data_write_proc.call record
+    }
+  end
+
+  private
   def load_scripts(data_type)
     script_list = case data_type
                     when :key_value
@@ -23,10 +36,6 @@ class RedisDump
         script_list.map do |script|
           [script, RedisScript.new(script.to_s)]
         end]
-  end
-
-  def quit
-    @redis.quit
   end
 
   def create_data_dump_proc(data_type)
@@ -63,6 +72,7 @@ class RedisDump
     }
   end
 
+  # @param [Hash] records
   def write_kv(records)
     script = @expiry ? @scripts[:key_value_dump_expire] : nil
     script_exists = script ? script.exists(@redis) : nil
@@ -79,14 +89,6 @@ class RedisDump
           @redis.incrby(key, value)
         end
       end
-    }
-  end
-
-  def write(chunk)
-    chunk.msgpack_each { |tag, time, record|
-      next unless record.is_a?(Hash)
-
-      @data_write_proc.call record
     }
   end
 end
