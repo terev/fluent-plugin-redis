@@ -3,7 +3,7 @@ $:.push File.expand_path("../lib", __FILE__)
 
 Gem::Specification.new do |s|
   s.name        = 'fluent-plugin-redis'
-  s.version     = '0.2.1'
+  s.version     = File.read('VERSION').strip
   s.authors     = ['Yuki Nishijima', 'Trevor Foster']
   s.date        = %q{2016-10-17}
   s.email       = 'mail@yukinishijima.net'
