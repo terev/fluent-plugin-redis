@@ -17,21 +17,37 @@ To build the plugin yourself and install it, see the section below. You need [bu
     git clone https://github.com/terev/fluent-plugin-redis
     cd fluent-plugin-redis
     bundle install
-    bundle exec rake build
+    gem build fluent-plugin-redis.gemspec
 
-After building the gem 
+After building the gem install using the same method mentioned above
+
+
+## Parameters
+
+param|value
+--------|------
+host|database host (default: localhost)
+port|database port (default: 6379)
+socket_path|if set connection will be made via unix socket (default: nil)
+password|redis password (default: nil)
+db_number|the database to initially connect to (default: 0)
+ttl|sets expiry for each flushed key in seconds (default: nil)
+data_type|data type to write to redis (supports: hash_map, key_value)
+aggregate_operator|if set data will be aggregated pre flush (supports: +,-,*,/,%)
     
-
 ## Configuration
 
     <match redis.**>
-      type redis
+      @type redis
 
       host localhost
       port 6379
 
       # database number is optional.
       db_number 0        # 0 is default
+      data_type key_value
+      
+      flush_interval 5s
     </match>
 
 
