@@ -1,4 +1,5 @@
 require 'fluent/output'
+require 'digest/sha1'
 
 module Fluent
   class RedisOutput < BufferedOutput
@@ -77,14 +78,54 @@ module Fluent
     end
 
     private
+    class Script
+      def initialize(file)
+        @filepath = File.join(File.dirname(__FILE__), "/../../scripts/#{file}.lua")
+        @contents = File.read(@filepath)
+        @hash = Digest::SHA1.hexdigest(@contents)
+      end
+
+      def call(redis, *args)
+        begin
+          redis.evalsha(@hash, *args)
+        rescue => e
+          (e.message =~ /NOSCRIPT/) ? redis.eval(@contents, *args) : raise
+        end
+      end
+
+      def exists(redis)
+        redis.script(:exists, @hash)
+      end
+
+      def load(redis)
+        $log.info "Loading script: #{@filepath}"
+        redis.script(:load, @contents)
+      end
+    end
+
     class RedisDump
       def initialize(redis_opts, data_type, expiry)
         @redis = Redis.new(redis_opts)
 
         @data_write_proc = create_data_dump_proc(data_type)
-        @key_options = {:nx => true}.tap do |hash|
-          hash[:ex] = expiry if expiry
-        end
+        @expiry = expiry if expiry
+
+        load_scripts(data_type)
+      end
+
+      def load_scripts(data_type)
+        script_list = case data_type
+                        when :key_value
+                          [:key_value_dump_expire]
+                        when :hash_map
+                          @expiry ? [:hash_dump_expire] : [:hash_dump]
+                        else
+                      end
+
+        @scripts = Hash[
+            script_list.map do |script|
+              [script, Script.new(script.to_s)]
+            end]
       end
 
       def quit
@@ -108,72 +149,40 @@ module Fluent
 
       # @param [Hash] records
       def write_hm(records)
-        records.each do |key, values|
-          next unless values.is_a?(Hash)
+        script = @expiry ? @scripts[:hash_dump_expire] : @scripts[:hash_dump]
+        script_exists = script ? script.exists(@redis) : nil
 
-          @redis.watch(key) do
-            if @redis.exists(key)
-              @redis.multi do |multi|
-                sets = {}
-                values.each do |field, value|
-                  case value
-                    when String
-                      sets[field] = value
-                    when Integer
-                      multi.hincrby(key, field, value)
-                    when Float
-                      multi.hincrbyfloat(key, field, value)
-                    else
-                      # Invalid type
-                  end
-                end
-                multi.mapped_hmset(key, sets) unless sets.empty?
-              end
-            else
-              @redis.unwatch
+        @redis.pipelined {
+          script.load(@redis) if script && !script_exists
 
-              if @key_options[:ex]
-                # New hash set all the fields and set expiry
-                @redis.pipelined {
-                  @redis.mapped_hmset(key, values)
-                  @redis.expire(key, @key_options[:ex])
-                }
-              else
-                # New hash set all the fields
-                @redis.mapped_hmset(key, values)
-              end
-            end
+          records.each do |key, values|
+            next unless values.is_a?(Hash)
+
+            argv = [key]
+            argv << @expiry if @expiry
+
+            script.call(@redis, :keys => values.flatten, :argv => argv)
           end
-        end
+        }
       end
 
       def write_kv(records)
-        keys = records.keys
+        script = @expiry ? @scripts[:key_value_dump_expire] : nil
+        script_exists = script ? script.exists(@redis) : nil
 
-        results = @redis.pipelined {
+        @redis.pipelined {
+          script.load(@redis) if script && !script_exists
+
           records.each do |key, value|
-            @redis.set(key, value, @key_options)
+            next if value.is_a?(String)
+
+            if script
+              script.call(@redis, :keys => [key], :argv => [value, @expiry])
+            else
+              @redis.incrby(key, value)
+            end
           end
         }
-
-        # Increment any keys that already exist
-        if results.any? { |result| !result }
-          @redis.pipelined {
-            results.each_index { |i, exists|
-              next if exists
-
-              key = keys[i]
-              value = records[key]
-              case value
-                when Integer
-                  @redis.incrby(key, value)
-                when Float
-                  @redis.incrbyfloat(key, value)
-                else
-              end
-            }
-          }
-        end
       end
 
       def write(chunk)
